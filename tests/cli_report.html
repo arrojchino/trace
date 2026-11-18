@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REA Forensic Analysis Report</title>
+<style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0 0 60px 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px; line-height: 1.55; color: #1a2027; background: #f4f6f8;
+    }
+    header { background: #0b2239; color: #fff; padding: 28px 32px; }
+    header h1 { margin: 0 0 6px 0; font-size: 24px; letter-spacing: .3px; }
+    header .meta { margin: 0; font-size: 13px; color: #b6c9dd; }
+    main { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+    section { background: #fff; border: 1px solid #dde3ea; border-radius: 6px;
+              margin: 22px 0; padding: 20px 24px; }
+    h2 { margin: 0 0 14px 0; font-size: 18px; color: #0b2239;
+         border-bottom: 2px solid #0b2239; padding-bottom: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; vertical-align: top; padding: 8px 10px;
+             border-bottom: 1px solid #e3e8ee; }
+    thead th { background: #eef2f6; color: #33404d; font-size: 12px;
+               text-transform: uppercase; letter-spacing: .5px; }
+    .kv th { width: 210px; color: #55636f; font-weight: 600; background: #fafbfc; }
+    .kv td { color: #1a2027; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 12.5px; word-break: break-all; }
+    .empty { color: #6b7785; font-style: italic; }
+    .sev-critical, .sev-high { color: #a4262c; font-weight: 700; }
+    .sev-medium { color: #9a6700; font-weight: 700; }
+    .sev-low, .sev-info, .sev-unknown { color: #2b6cb0; font-weight: 600; }
+    .ok { color: #1b7f3a; font-weight: 700; }
+    .missing { color: #a4262c; font-weight: 700; }
+    .disclaimer { background: #fff8e1; border: 1px solid #f0c36d;
+                  border-left: 5px solid #d99b00; border-radius: 6px;
+                  padding: 16px 20px; margin: 22px 0; color: #5a4300; }
+    .disclaimer h2 { color: #7a5b00; border-bottom-color: #d99b00; }
+    footer { max-width: 1080px; margin: 0 auto; padding: 0 24px;
+             font-size: 12px; color: #6b7785; }
+    </style>
+</head>
+<body>
+<header>
+  <h1>REA Forensic Analysis Report</h1>
+  <p class="meta">Generated 2026-11-17T23:31:17Z &middot; schema v1.0 &middot; source: rea_analysis.json</p>
+</header>
+<main>
+  <section>
+    <h2>1. Target Identification</h2>
+    <table class="kv"><tbody><tr><th>name</th><td>legacy_daemon.bin</td></tr><tr><th>path</th><td>/opt/samples/legacy_daemon.bin</td></tr><tr><th>file_type</th><td>ELF 64-bit LSB executable, x86-64</td></tr><tr><th>architecture</th><td>x86-64</td></tr><tr><th>platform</th><td>linux-gnu</td></tr><tr><th>sha256_note</th><td>See evidence chain for locally computed hash</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>2. Toolchain / Version</h2>
+    <table class="kv"><tbody><tr><th>engine</th><td>REA (Reverse Engineering Agent)</td></tr><tr><th>plugin_version</th><td>1.0.0</td></tr><tr><th>disassembler</th><td>capstone</td></tr><tr><th>analysis_date</th><td>2026-11-17T09:15:00Z</td></tr><tr><th>analysis_mode</th><td>static</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>3. Analysis Summary</h2>
+    <table class="kv"><tbody><tr><th>total_findings</th><td>4</td></tr><tr><th>critical</th><td>1</td></tr><tr><th>high</th><td>1</td></tr><tr><th>medium</th><td>1</td></tr><tr><th>low</th><td>1</td></tr><tr><th>analysis_duration_seconds</th><td>42.7</td></tr><tr><th>notes</th><td>Demo dataset illustrating REA-output-to-report handoff.</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>4. Findings</h2>
+    <table><thead><tr><th>ID</th><th>Severity</th><th>Type</th><th>Address / Offset</th><th>Confidence</th><th>Description</th></tr></thead><tbody><tr><td class="sev-critical">F-001</td><td>critical</td><td>hardcoded_credential</td><td class="mono">0x401f3a</td><td>high</td><td>Static string referencing an embedded credential blob in .rodata; value redacted.</td></tr><tr><td class="sev-high">F-002</td><td>high</td><td>suspicious_network_call</td><td class="mono">0x22a4</td><td>medium</td><td>Call to connect() with an obfuscated endpoint resolved at runtime.</td></tr><tr><td class="sev-medium">F-003</td><td>medium</td><td>obfuscated_string</td><td class="mono">0x4039c0</td><td>medium</td><td>XOR-encoded string decoded into stack buffer before use.</td></tr><tr><td class="sev-low">F-004</td><td>low</td><td>anti_debug_check</td><td class="mono">0x1f10</td><td>low</td><td>Ptrace-based debugger detection branch observed in entry routine.</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>5. Evidence Chain (Artifact Hashes)</h2>
+    <table><thead><tr><th>#</th><th>Artifact Path</th><th>Role</th><th>SHA-256</th><th>Status</th><th>Size</th></tr></thead><tbody><tr><td class="mono">1</td><td>legacy_daemon.bin</td><td class="mono">primary_binary</td><td class="mono">785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9</td><td class="ok">PRESENT</td><td>1024 bytes</td></tr><tr><td class="mono">2</td><td>config.dat</td><td class="mono">configuration_blob</td><td class="mono">f8adb4408a4f96641f2492aaef415ade6550bb4927e649bff84a48096d4b6e19</td><td class="ok">PRESENT</td><td>90 bytes</td></tr><tr><td class="mono">3</td><td>not_present_on_disk.bin</td><td class="mono">referenced_external_sample</td><td class="mono">MISSING</td><td class="missing">MISSING</td><td>n/a</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>6. Chain of Custody</h2>
+    <table>
+      <thead><tr><th>Step</th><th>Action</th><th>Detail</th></tr></thead>
+      <tbody><tr><td class="mono">1</td><td>analysis_json_ingested</td><td class="mono">C:\Users\Garza\soc-projects\rea-forensics\sample\rea_analysis.json</td></tr><tr><td class="mono">2</td><td>artifact_store_resolved</td><td class="mono">C:\Users\Garza\soc-projects\rea-forensics\sample\artifacts</td></tr><tr><td class="mono">3</td><td>sha256_hashed</td><td class="mono">3 artifact(s)</td></tr><tr><td class="mono">4</td><td>manifest_written</td><td class="mono">C:\Users\Garza\soc-projects\rea-forensics\tests\cli_manifest.csv</td></tr><tr><td class="mono">5</td><td>report_rendered</td><td class="mono">self-contained HTML</td></tr></tbody>
+    </table>
+  </section>
+
+  <div class="disclaimer">
+    <h2>Disclaimer</h2>
+    <p><strong>These findings are reverse-engineering evidence, not a verdict.</strong>
+    This report renders the observations produced by an automated reverse-engineering
+    analysis and records integrity hashes of the referenced artifacts. It does not
+    establish malicious intent, attribute authorship, or constitute a legal or
+    final determination. All findings require independent review and corroboration
+    by a qualified analyst before any conclusion is drawn. Artifacts marked
+    MISSING were not present on disk and were not hashed.</p>
+  </div>
+</main>
+<footer>
+  Self-contained report &middot; no external resources &middot; produced by pipeline.py
+  (standard library only).
+</footer>
+</body>
+</html>

@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.0",
+  "target": {
+    "name": "legacy_daemon.bin",
+    "path": "/opt/samples/legacy_daemon.bin",
+    "file_type": "ELF 64-bit LSB executable, x86-64",
+    "architecture": "x86-64",
+    "platform": "linux-gnu",
+    "sha256_note": "See evidence chain for locally computed hash"
+  },
+  "toolchain": {
+    "engine": "REA (Reverse Engineering Agent)",
+    "plugin_version": "1.0.0",
+    "disassembler": "capstone",
+    "analysis_date": "2026-11-17T09:15:00Z",
+    "analysis_mode": "static"
+  },
+  "analysis_summary": {
+    "total_findings": 4,
+    "critical": 1,
+    "high": 1,
+    "medium": 1,
+    "low": 1,
+    "analysis_duration_seconds": 42.7,
+    "notes": "Demo dataset illustrating REA-output-to-report handoff."
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "critical",
+      "type": "hardcoded_credential",
+      "address": "0x401f3a",
+      "confidence": "high",
+      "description": "Static string referencing an embedded credential blob in .rodata; value redacted."
+    },
+    {
+      "id": "F-002",
+      "severity": "high",
+      "type": "suspicious_network_call",
+      "offset": "0x22a4",
+      "confidence": "medium",
+      "description": "Call to connect() with an obfuscated endpoint resolved at runtime."
+    },
+    {
+      "id": "F-003",
+      "severity": "medium",
+      "type": "obfuscated_string",
+      "address": "0x4039c0",
+      "confidence": "medium",
+      "description": "XOR-encoded string decoded into stack buffer before use."
+    },
+    {
+      "id": "F-004",
+      "severity": "low",
+      "type": "anti_debug_check",
+      "offset": "0x1f10",
+      "confidence": "low",
+      "description": "Ptrace-based debugger detection branch observed in entry routine."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "legacy_daemon.bin",
+      "role": "primary_binary",
+      "description": "Main executable under analysis."
+    },
+    {
+      "path": "config.dat",
+      "role": "configuration_blob",
+      "description": "Companion configuration data referenced by the binary."
+    },
+    {
+      "path": "not_present_on_disk.bin",
+      "role": "referenced_external_sample",
+      "description": "Intentionally absent, to demonstrate MISSING handling."
+    }
+  ]
+}
