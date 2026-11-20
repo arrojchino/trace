@@ -23,8 +23,25 @@ import sys
 SCHEMA_VERSION = "1.0"
 MISSING = "MISSING"
 EXIT_INPUT_ERROR = 2
+EXIT_INTEGRITY_FAILURE = 1
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
+
+# Verify verdicts. MATCH and ABSENT are consistent with the prior manifest and
+# do not fail the run; DRIFT and MISSING are integrity failures (exit 1).
+V_MATCH = "MATCH"
+V_DRIFT = "DRIFT"
+V_MISSING = "MISSING"
+V_ABSENT = "ABSENT"
+V_APPEARED = "APPEARED"
+
+# Machine-readable verify report (--json). An explicit status vocabulary lets
+# CI consume the result without parsing prose. Status/exit-code pairing mirrors
+# the structured action reports of the workflow upstream-sync tooling.
+VERIFY_REPORT_SCHEMA = "1.0"
+R_STATUS_OK = "ok"
+R_STATUS_INTEGRITY_FAILURE = "integrity-failure"
+R_STATUS_INPUT_ERROR = "input-error"
 
 
 class AnalysisError(Exception):
@@ -179,8 +196,28 @@ def hash_artifacts(analysis, artifacts_dir):
     return rows
 
 
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe_cell(value):
+    """Neutralize spreadsheet formula injection in an evidence CSV cell.
+
+    Artifact paths and roles come from an exported analysis file (untrusted
+    input). A cell beginning with =, +, -, @, tab or carriage return is prefixed
+    with a single quote so spreadsheet applications render it as text instead
+    of executing it as a formula.
+    """
+    text = "" if value is None else str(value)
+    if text and text[0] in _CSV_FORMULA_PREFIXES:
+        return "'" + text
+    return text
+
+
 def write_manifest(rows, manifest_path):
-    """Write the evidence manifest CSV (path, sha256, size, role)."""
+    """Write the evidence manifest CSV (path, sha256, size, role).
+
+    Every data cell is run through _csv_safe_cell before writing.
+    """
     parent = os.path.dirname(os.path.abspath(manifest_path))
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
@@ -188,7 +225,161 @@ def write_manifest(rows, manifest_path):
         writer = csv.writer(handle)
         writer.writerow(["path", "sha256", "size", "role"])
         for row in rows:
-            writer.writerow([row["path"], row["sha256"], row["size"], row["role"]])
+            writer.writerow([_csv_safe_cell(row[key]) for key in
+                             ("path", "sha256", "size", "role")])
+
+
+def _unescape_cell(value):
+    """Undo the apostrophe prefix that _csv_safe_cell may have added.
+
+    A cell written as `'=...` is read back as `=...`. Only a leading apostrophe
+    followed by a formula prefix is treated as an escape; any other apostrophe
+    is a literal part of the cell and is preserved.
+    """
+    if value and value[0] == "'" and len(value) > 1 and value[1] in _CSV_FORMULA_PREFIXES:
+        return value[1:]
+    return value
+
+
+def read_manifest(path):
+    """Read an evidence manifest CSV written by write_manifest.
+
+    Returns a list of row dicts with keys path, sha256, size, role. Raises
+    AnalysisError on an unreadable file, a wrong header, or a ragged row so a
+    malformed audit trail can never be silently trusted.
+    """
+    try:
+        with open(path, newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            try:
+                header = next(reader)
+            except StopIteration:
+                raise AnalysisError("manifest %r is empty (no header row)" % path)
+            if header != ["path", "sha256", "size", "role"]:
+                raise AnalysisError(
+                    "unexpected manifest header %r; expected path,sha256,size,role"
+                    % (header,)
+                )
+            rows = []
+            for lineno, cells in enumerate(reader, start=2):
+                if not cells:
+                    continue
+                if len(cells) != 4:
+                    raise AnalysisError(
+                        "manifest line %d has %d column(s); expected 4"
+                        % (lineno, len(cells))
+                    )
+                rows.append({
+                    "path": _unescape_cell(cells[0]),
+                    "sha256": _unescape_cell(cells[1]),
+                    "size": _unescape_cell(cells[2]),
+                    "role": _unescape_cell(cells[3]),
+                })
+    except OSError as exc:
+        raise AnalysisError("cannot read manifest %r: %s" % (path, exc))
+    return rows
+
+
+def verify_manifest(rows, artifacts_dir):
+    """Re-hash each artifact and compare it to a prior evidence manifest.
+
+    Returns (verdicts, counts). Each verdict records expected vs observed hash
+    and a status. Statuses DRIFT (hash changed) and MISSING (recorded artifact
+    disappeared) are integrity failures; MATCH, ABSENT and APPEARED are
+    consistent with the manifest and do not fail the run.
+    """
+    verdicts = []
+    for row in rows:
+        rel_path = row["path"]
+        candidate = rel_path
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(artifacts_dir, rel_path)
+        exists = os.path.isfile(candidate)
+        actual_sha, actual_size = sha256_of_file(candidate) if exists else (None, None)
+        expected = row["sha256"]
+
+        if expected == MISSING or not expected:
+            status = V_APPEARED if exists else V_ABSENT
+        elif not exists:
+            status = V_MISSING
+        elif actual_sha == expected:
+            status = V_MATCH
+        else:
+            status = V_DRIFT
+
+        verdicts.append({
+            "path": rel_path,
+            "role": row["role"],
+            "expected": expected if expected else MISSING,
+            "actual": actual_sha if actual_sha else MISSING,
+            "size_expected": row["size"],
+            "size_actual": actual_size if actual_size is not None else MISSING,
+            "status": status,
+        })
+
+    counts = {
+        key: sum(1 for verdict in verdicts if verdict["status"] == key)
+        for key in (V_MATCH, V_DRIFT, V_MISSING, V_ABSENT, V_APPEARED)
+    }
+    return verdicts, counts
+
+
+def build_verify_report(manifest_path, verdicts, counts):
+    """Build the machine-readable verify report emitted by --verify --json.
+
+    The status and exit_code are derived from the same counts that decide the
+    prose verdict, so the two modes can never disagree. Per-artifact entries
+    rename the internal ``actual``/``size_actual`` keys to the clearer
+    ``observed``/``size_observed`` for the public contract.
+    """
+    failures = counts[V_DRIFT] + counts[V_MISSING]
+    return {
+        "tool": "rea-forensics",
+        "command": "verify",
+        "schema_version": VERIFY_REPORT_SCHEMA,
+        "status": R_STATUS_INTEGRITY_FAILURE if failures else R_STATUS_OK,
+        "exit_code": EXIT_INTEGRITY_FAILURE if failures else 0,
+        "manifest": manifest_path,
+        "counts": {key: counts[key] for key in
+                   (V_MATCH, V_DRIFT, V_MISSING, V_ABSENT, V_APPEARED)},
+        "artifacts": [
+            {
+                "path": v["path"],
+                "role": v["role"],
+                "expected": v["expected"],
+                "observed": v["actual"],
+                "size_expected": v["size_expected"],
+                "size_observed": v["size_actual"],
+                "status": v["status"],
+            }
+            for v in verdicts
+        ],
+    }
+
+
+def build_verify_error_report(manifest_path, problems):
+    """Build the --json report for an unreadable or malformed manifest.
+
+    A bad audit trail is a fail-closed input error: no verdicts are produced
+    and the explicit status lets CI distinguish it from an integrity failure.
+    """
+    if isinstance(problems, str):
+        problems = [problems]
+    return {
+        "tool": "rea-forensics",
+        "command": "verify",
+        "schema_version": VERIFY_REPORT_SCHEMA,
+        "status": R_STATUS_INPUT_ERROR,
+        "exit_code": EXIT_INPUT_ERROR,
+        "manifest": manifest_path,
+        "errors": [str(problem) for problem in problems],
+        "artifacts": [],
+    }
+
+
+def _emit_json(report):
+    """Write one JSON document, pretty-printed, as the only stdout content."""
+    sys.stdout.write(json.dumps(report, indent=2) + "\n")
 
 
 def _esc(value):
@@ -468,6 +659,24 @@ def report_error(problems):
     sys.stderr.write("No report was generated.\n")
 
 
+def _run_stamp():
+    """UTC timestamp used to give each demo run its own audit file names."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def existing_output_paths(paths, overwrite):
+    """Return output paths that already exist when replacement is not allowed.
+
+    A report or manifest is the audit record of one pipeline run. Replacing one
+    silently would destroy evidence from an earlier run, so the caller treats a
+    non-empty result as a fail-closed input error and writes nothing. Passing
+    ``overwrite=True`` is an explicit decision to allow replacement.
+    """
+    if overwrite:
+        return []
+    return [path for path in paths if path and os.path.exists(path)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Consume REA analysis JSON and render a forensic HTML report "
@@ -478,6 +687,23 @@ def main(argv=None):
     parser.add_argument("--out", help="Output HTML report path")
     parser.add_argument("--manifest", help="Output evidence manifest CSV path (optional)")
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow --out/--manifest to replace existing files (default: refuse).",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Re-hash artifacts against an existing --manifest and report hash drift "
+        "(exit 1 on drift or a missing recorded artifact) instead of rendering a report.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="With --verify, emit a machine-readable JSON report on stdout instead of "
+        "prose. Exit codes and the status vocabulary are unchanged.",
+    )
+    parser.add_argument(
         "--demo",
         action="store_true",
         help="Use bundled sample/rea_analysis.json and sample/artifacts/",
@@ -486,11 +712,59 @@ def main(argv=None):
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
+    if args.json and not args.verify:
+        parser.error("--json is only valid with --verify")
+
+    if args.verify:
+        if not args.manifest or not args.artifacts:
+            parser.error("--verify requires both --manifest and --artifacts")
+        try:
+            prior_rows = read_manifest(args.manifest)
+        except AnalysisError as exc:
+            problems = exc.args[0] if exc.args else str(exc)
+            if args.json:
+                _emit_json(build_verify_error_report(args.manifest, problems))
+            else:
+                report_error(problems)
+            return EXIT_INPUT_ERROR
+        verdicts, counts = verify_manifest(prior_rows, args.artifacts)
+        if args.json:
+            # Structured output is the only thing on stdout: no prose to parse.
+            _emit_json(build_verify_report(args.manifest, verdicts, counts))
+        else:
+            for verdict in verdicts:
+                sys.stdout.write(
+                    "%-8s %s (expected %s, observed %s)\n"
+                    % (verdict["status"], verdict["path"], verdict["expected"], verdict["actual"])
+                )
+            sys.stdout.write(
+                "Verified %d artifact(s): %d match, %d drift, %d missing, "
+                "%d absent, %d appeared.\n"
+                % (
+                    len(verdicts), counts[V_MATCH], counts[V_DRIFT], counts[V_MISSING],
+                    counts[V_ABSENT], counts[V_APPEARED],
+                )
+            )
+        failures = counts[V_DRIFT] + counts[V_MISSING]
+        if failures:
+            if not args.json:
+                sys.stderr.write(
+                    "INTEGRITY FAILURE: %d recorded artifact(s) changed or disappeared.\n"
+                    % failures
+                )
+            return EXIT_INTEGRITY_FAILURE
+        if not args.json:
+            sys.stdout.write("OK: evidence integrity confirmed against manifest.\n")
+        return 0
+
     if args.demo:
         analysis_path = os.path.join(script_dir, "sample", "rea_analysis.json")
         artifacts_dir = os.path.join(script_dir, "sample", "artifacts")
-        out_path = args.out or os.path.join(os.getcwd(), "report.html")
-        manifest_path = args.manifest or os.path.join(os.getcwd(), "manifest.csv")
+        stamp = _run_stamp()
+        out_path = args.out or os.path.join(os.getcwd(), "report-%s.html" % stamp)
+        manifest_path = args.manifest or os.path.join(
+            os.getcwd(), "manifest-%s.csv" % stamp
+        )
     else:
         missing_args = [
             name
@@ -507,6 +781,19 @@ def main(argv=None):
         artifacts_dir = args.artifacts
         out_path = args.out
         manifest_path = args.manifest
+
+    # Preflight: never clobber a prior run's audit record unless explicitly told
+    # to. Check before reading input or writing anything so refusal is atomic.
+    existing = existing_output_paths([out_path, manifest_path], args.overwrite)
+    if existing:
+        sys.stderr.write(
+            "ERROR: refusing to replace existing output file(s): %s\n"
+            % ", ".join(existing)
+        )
+        sys.stderr.write(
+            "No report was generated. Pass --overwrite to allow replacement.\n"
+        )
+        return EXIT_INPUT_ERROR
 
     try:
         raw = load_analysis(analysis_path)
